@@ -1,0 +1,346 @@
+**Micro-services approach to configure a frontend and build a backend serverless application.**
+
+Frontend:
+
+Amplify Console provides a simple, Git-based workflow for deploying and hosting fullstack serverless web applications. Amplify Console can create both the frontend and backend but for this workshop we will be using Amplify Console for only the frontend.
+
+Amplify will be used to host static web resources including HTML, CSS, JavaScript, and image files which are loaded in the user's browser via S3.
+
+
+Backend:
+The backend application architecture uses AWS Lambda , Amazon API Gateway , Amazon S3 , Amazon DynamoDB , Amazon Cognito , and Amazon Cloudfront .
+
+JavaScript executed in the frontend browser application sends and receives data from a public backend API built using API Gateway and Lambda. DynamoDB provides a persistence data storage layer which is used by the API's Lambda functions. Amazon Cloudfront serves processed photos from an Amazon S3 Storage.
+
+(refer to final_arch.png for the arch)
+
+ --------------------- SETUP---------------------------- 
+AWS Cloud9 IDE:
+
+AWS Cloud9  is a cloud-based integrated development environment (IDE) that lets us write, run, and debug our code with just a browser. It includes a code editor, debugger, and terminal. Cloud9 comes pre-packaged with essential tools for popular programming languages and the AWS Command Line Interface (CLI) pre-installed so we don’t need to install files or configure your laptop for this workshop.
+Our Cloud9 environment will have access to the same AWS resources as the user with which logged into the AWS Management Console.
+
+Creation:
+
+1) created environment: "theme-park-development" , verified our AWS region with commands in cloud9 terminal making sure that region is supported. (for the purpose of this project we have selected N.virginia as our region to access all the resources.)
+**(refer to aws_cloud9.png)**
+
+
+2)Cloning the github repository , ran the following command & installed JQ to provide JSON formatting:
+
+cd ~/environment/
+git clone https://github.com/aws-samples/aws-serverless-workshop-innovator-island ./theme-park-backend
+
+sudo yum install jq -y
+	
+-------------------------- Deploy application--------------------
+
+The frontend is a Progressive Web App  (PWA) developed in Vue.js 
+
+*A DynamoDB table containing information about all the rides and attractions throughout the park.
+
+*A Lambda function which performs a table scan on the DynamoDB to return all the items.
+
+*An API Gateway API which creates a public http endpoint for the front-end application to query. This invokes the Lambda function to return a list of rides and attractions.
+
+
+(refering to serverless_f.e)
+
+*All static web content including HTML, CSS, JavaScript, images and other files will be managed by AWS Amplify Console and served via Amazon CloudFront.End users will then access site using the public website URL exposed by AWS Amplify Console. don't need to run any web servers or use other services in order to make your site available.
+
+
+Frontend : CodeCommit
+
+1) Created repository: "theme-park-frontend". (refer to CodeCommit)
+2) clone code base.
+3) Deploy the site with aws amplify console. amplify hosting.
+
+This will open the published URL in browser. the empty park map with a navigation bar. At the moment, there is very little functionality in the application 
+
+Backend: (refering to serverless_b.e)
+
+SAM , Serverless Application Model which is an open-source framework that makes it easier to deploy serverless infrastructure. This allowed to specify application requirements in code and SAM transforms and expands the SAM syntax into AWS CloudFormation to deploy application.
+
+1) In cloud9 CLI , created a deployment bucket in s3 named "s3_deploy_bucket" . SAM will upload its code to the bucket to deploy application services. After executing the code , SAM has now used CloudFormation to deploy a stack of backend resources which will be used for the rest of the workshop, 2 x Lambda functions, 3 x S3 buckets, a DynamoDBTable, Cognito UserPool, AWS IoT thing and a number of IAM Roles and Policies.	
+
+Database:
+
+DynamoDB is a key-value and document database which is used to store information about all the rides and attractions throughout the park.The SAM template created a DynamoDB table for the application. 
+Tested the deployment by using the CLI to scan the DynamoDB table, and using curl to test the API Gateway endpoint.
+
+TESITNG:
+This opens another browser tab and returns all the raw ride and attraction data from the DynamoDB table via API Gateway and Lambda. created a public API that our frontend application can use to populate the map with points of interest
+
+
+-----------------------REAL-TIME RIDE WAIT TIMES----------------------------------------
+
+
+**The Controller publishes updates every minute to an Amazon SNS topic. 
+
+**created a Lambda function in your account that is invoked whenever notifications arrive on this topic. This function will store the message in DynamoDB and forward the message to IoT Core.
+(refering realtime_serverless_b.e)
+
+
+**The Flow & Traffic Controller is already deployed and publishes updates to an SNS topic.
+
+**The Lambda function receives new messages as an event payload and parses out the message. It then stores the message in a DynamoDB table and forwards to an IoT topic.
+
+**The DynamoDB table only stores the last message. This initial state is needed when the front-end application is first loaded.
+
+**The IoT topic is the conduit from the serverless backend to the front-end application. Any messages posted here will be received by the front-end.
+
+
+Lambda:
+
+1) author from scratch , function name:theme-park-ridetimes
+2) trigger configuration , chose SNS . topic as "theme-park-ride-times"
+
+This Lambda function code reads the latest message from the SNS topic, writes it to the DynamoDB table, and then pushes the message to the frontend application via an IoT topic.
+
+IOT_DATA_ENDPOINT: the IoT endpoint hostname.
+IOT_TOPIC: The name of the IoT topic to publish messages to, which is theme-park-rides.
+DDB_TABLE_NAME: The name of the application's DynamoDB table.
+
+*Connected your backend application with the Flow & Traffic Controller's SNS topic.
+
+*Created a Lambda function that was invoked by the SNS topic whenever a new message is published.
+
+*Published the message to the IoT topic for the front end.
+
+*Updated the frontend with the configuration information so it can listen to new messages on the IoT topic
+
+TESTING: can see the rides and attractions on the theme park map show realtime wait times that update every minute.
+
+(done from here look upwards from here for iam role)--------------------- ON-RIDE PHOTO PROCESSING--------------------------------
+
+**The front-end calls an API endpoint to get a presigned URL to upload the photo to S3. This enables the front-end application to upload directly to S3 without a webserver. This results in a new JPG object in the S3 Upload bucket.
+
+**When a new object is written to the Upload bucket, this invokes the first Lambda function in the sequence, which uses a process called Chromakey to remove the green screen background from the image. The resulting image is written to the Processing bucket.
+
+**When a new object is written to the Processing bucket, this invokes the next Lambda function which composites the image with a new background and theme park logo. This resulting image is written into the Final bucket.
+
+**Lastly, when a new object is written to the Final bucket, this invokes the final Lambda function which sends a notification to IoT core that the file is ready. This notifies the front-end application via the IoT topic notifications.
+
+(refering to serverless_b.e_2)
+
+Serverless Backend:
+
+**The image is uploaded by the front-end into the Upload Bucket.
+
+**A chromakey process removes the background and saves the object into the Processing Bucket.
+
+**A compositing process creates a final image that is saved into the Final Bucket.
+
+**A message is sent to IoT Core to notify the front-end that the file is now ready.
+
+
+
+Creating the chroma key lambda function:
+
+This function implements chroma key processing , also commonly known as green screen. It takes an input image of a person against a green background, removes the green, and then saves the output image.
+
+1) creating openCV lambda layer (open source python library)
+2) creating the chromakey lambda function 
+
+3)creating a lambda function called : theme-park-photos-chromakey (python 3.11 & x86_64)
+4)assign ThemeparkLambdarole
+5)trigger , select s3 . name:theme-park-backend-uploadbucket
+
+OUTPUT_BUCKET_NAME: the name of the bucket where the output object is stored.
+HSV_LOWER: A tuple representing lower HSV value for the green screen chroma key matching process.
+HSV_UPPER: A tuple representing upper HSV value for the green screen chroma key matching process.
+
+OUTPUT_BUCKET_NAME: value after performing steps.
+HSV_LOWER: [36, 100, 100]
+HSV_UPPER: [75 ,255, 255]
+
+6) Change settings for the lambda function (adding more CPU & network resources to the lambda function.)
+
+for the function : "theme-park-photos-chromakey" , memory size to 3008MB & timeout values 0 & 10 sec. since chroma key process uses memory-intensive libraries to complete the graphic processing.
+
+7) Testing the above function. observation:  the original green screen image has been modified showing the person with the green background now removed. The Lambda function has been invoked when the photo was uploaded to the S3 bucket. The function ran a chromakey process using a library imported using a Lambda Layer which removed the green screen and then wrote the resulting image to another S3 bucket
+
+
+Creating the photo compositing Lambda function: 
+
+The function takes the processed image from the previous section - the person with the green background removed - and composites various graphics elements into a final image. This final image is saved in the final bucket.
+
+The AWS SAM template file is a YAML or JSON configuration file. 
+
+SAM will read this file and convert this YAML into infrastructure. Some of the important sections for the project include:
+
+**Parameters: the function needs to know the name of the final bucket, so you can provide this as a parameter to the template.
+
+**Globals: any settings here will apply across the entire template.
+
+**Resources: defines the AWS resources to create.
+
+1) create lambda function using SAM
+2) Adding s3 trigger (This compositing function needs to execute when a new object is put into the processingbucket.)
+
+in function with the name: "theme-park-photos-CompositeFunction-XXXXXXXXX"
+
+trigger config -> s3 . bucket name "theme-park-backend-processingbucket"
+3) Test the function. observation: photo of the person has had the green background removed, and is now composited with the theme park background and logo graphics.
+
+Creating the post-processing Lambda function : 
+
+The final Lambda function in the photo processing pipeline is triggered when the final image is rendered and saved into the S3 finalbucket. It will save the photo object information into the DynamoDB table and send a message to the IoT topic so the frontend application is notified.
+
+1) creating lambda function : theme-park-photos-postprocess (node.js 18.x & arm64 arch)
+2) role park-backend-ThemeParkLambdaRole
+3) trigger , s3 . bucket name theme-park-backend-finalbucket.
+
+4) adding environment variables 
+IOT_DATA_ENDPOINT: the IoT endpoint hostname.
+DDB_TABLE_NAME: the DynamoDB table name used by the application.
+WEB_APP_DOMAIN: the Cloudfront distribution used to serve photos.
+
+5) updating frontend
+6) push to codecommit and deploy via amplify
+
+TESTING : new button has appeared - " add ride photo"
+
+
+
+------------------TRANSLATION--------------------------
+Many of the visitors to the the park's island come from all over the world and English is not their first language. Adding alternative language options will make it much easier for guests to understand and interact with the app.
+
+**The front-end application uses a local languages resource file to substitute language strings when the locale is changed.
+
+**download the file and use a Node function that uses Amazon Translate to create a new file with a range of translations.
+
+**After the new language file is created, copy it into the frontend code and republish through Amplify Console.
+
+**Finally  reload the front-end and test the new language functionality.
+
+
+TESTING: can see a new translations button has appeared in the menu bar at the top of the display. can click this and select a non-English language from the list of translations. Now can read the description in other languages.
+
+-------------PARK STATS (not included)------------------------------------------
+
+Analyze streaming data using Amazon Kinesis, Lambda, and Amazon QuickSight. deploy a simulator to create the data, then ingest and analyze the data.Each park visitor has a wristband that collects data throughout the day. It records when visitors arrive and leave, and keeps track of every ride they visit.
+
+When participants exit each ride, they tap the wristband on a ratings collection device. This leaves a rating from 1 (bad) to 5 (great). The wristband also transmits information about the visitor's name, age and home location.
+
+Every tap from a wristband creates an IoT message routed to the Amazon Kinesis Firehose delivery stream.
+
+There are three types of event currently monitored in the park: Entry, Ride and Exit.
+
+All messages are sent to the Kinesis Firehose delivery stream. This ingests large numbers of messages and stores the result in Amazon S3.
+
+Since the theme park hasn't opened yet, you will deploy a simulator to generate messages. This simulates data from ~70,000 visitors over the course of a 12-hour day.
+
+(referred serverless_b.e_3)
+
+Amazon Kinesis Data Firehose is a fully managed service that reliably loads streaming data into data lakes, data stores and analytics tools. It can capture, transform, and load streaming data into Amazon S3, Amazon Redshift, Amazon Elasticsearch Service, and Splunk, enabling near real-time analytics with existing business intelligence tools like Amazon QuickSight.
+
+It automatically scales to match the throughput of your data and requires no ongoing administration. You can configure a delivery stream and start sending data from hundreds of thousands of data sources to be loaded continuously to AWS – all in just a few minutes.
+
+1) configure a kinesis firehose delivery stream
+2) deploy and run the simulator
+
+ deploy the simulator application using SAM. The simulator runs in a Lambda function.
+The simulator generates approximately hundreds of thousands messages for ~30,000 visitors. On average, it produces 500Mb of streaming data. It will take ~5 minutes to simulate an entire 12-hour park day, streaming at an average 1000 transactions per second.
+These messages are sent to the Kinesis Firehose delivery stream you configured in the previous step. They will start appearing in the dedicated S3 bucket shortly after the simulator starts.
+
+
+----------------EVENT BASED ARCH-----------------------------------------
+
+
+The Flow & Traffic Controller system provides the web app with ride times via an SNS topic.
+
+Now the guests know about wait times and outages, but the park's maintenance staff don't know when ride systems are down. They would like notifications when problems occur. Since you have deployed the previous app already, we want to address this new requirement without making any changes to the existing infrastructure.
+
+
+
+connect the SNS topic with the ride data to Amazon EventBridge, a serverless event bus service.
+
+A Lambda function can push data from the SNS topic to EventBridge. This helps decouple the producers and consumers of events, so if there are any more "new requirements" later, it will be easy to address these without impacting existing systems.
+
+EventBridge uses rules to filter incoming events and decided where they should be routed. You will be using rules to filter a subset of events to each of three services you need to build.
+
+(refering to serverless_b.e_4)
+
+**The Flow & Traffic Controller is a separate system in the park. You are provided with the SNS topic ARN to use.
+
+**The Lambda function receive new messages from the SNS topic. It parses this message and sends events to the 
+EventBridge event bus.
+
+**EventBridge receives these events and uses rules to decide where they should be routed.
+
+**Events are routed to any number of downstream consumers, which are completely decoupled from the event producers.
+
+1) setup environment variables
+2)configuring infrastructure
+3) connect sns with eventbridge
+4)Select the Lambda function with the name beginning theme-park-events-PublishFunction
+5) add trigger, SNS. topic :ride-times
+6) publishing ride data to cloudwatch metrics
+7) creating dashboard
+(referred to cloudwatch_ride_waittime)
+
+Enrich events and create alerts
+(refering to aws_eventbridge_archj)
+
+1) creating richer outage-related events , 
+(refering to outage_related_event_)
+2) the Define rule detail page
+3)the Build event pattern page
+4)the Select targets page
+
+EventBridge will now filter events on the default bus and send events matching the pattern to the Lambda function and a CloudWatch log group. This Lambda function enriches those events with more outage information, and send these to the default eventbus with the detail-type outage.
+
+
+
+Creating alerts for info/warning outage events :
+
+1) creating alerts for info/warning outage events
+ topic :theme-park-events-outages-alerts-info
+2) Email-JSON subscription 
+3) create topic : theme-park-events-outages-alerts-emergency.
+4) create subscription: SMS
+5) TEST : receive an SMS on your phone with the emergency alert. (referring sns_sms)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
